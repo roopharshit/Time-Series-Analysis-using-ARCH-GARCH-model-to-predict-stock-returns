@@ -1,0 +1,628 @@
+---
+title: "Project Part-1"
+author: "Roop Vankayalapati"
+date: "`r Sys.Date()`"
+output: word_document
+---
+
+
+PART - 1
+
+```{r}
+
+##Installing Libraries and getting data
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+library("quantmod")
+library("forecast")
+source("Z:\\TAMU\\Fall'22\\STAT 631\\Term Project\\ARMAroots_RFunctions.R")
+source("Z:\\TAMU\\Fall'22\\STAT 631\\Term Project\\GARCH_RFunctions.R")
+source("Z:\\TAMU\\Fall'22\\STAT 631\\Term Project\\GARCH_plotFunctions.R")
+
+
+getSymbols("UL")
+cat("starting date : \n")
+
+head(UL, 2)
+
+
+```
+
+```{r}
+
+##Checking for missing values
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+cat("missing values : ",sum(is.na(UL)))
+
+```
+
+```{r}
+
+##Checking ARCH condition
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+Yt = dailyReturn(Ad(UL), type = "log")[-1]
+Acf(Yt^2, lag.max = 10*log10(100000))
+
+```
+
+```{r}
+##Getting daily returns
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+getSymbols("UL", from = "2007-01-01", to = "2022-11-01")
+Yt = dailyReturn(Ad(UL), type = "log")[-1]
+colnames(Yt) = "UL"
+
+
+Yt = 100*Yt ## convert to %
+head(Yt, 2)
+tail(Yt, 2)
+dim(Yt)
+
+```
+
+```{r}
+##Getting Training dataset
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+ind = which(time(Yt) == "2017-12-29")
+Yn = Yt[1:ind,]; dim(Yn)
+Y.test = Yt[(ind+1):3985,]
+dim(Y.test)
+n = length(Yn)
+
+
+
+save.image("Z:\\TAMU\\Fall'22\\STAT 631\\Term Project\\garch.RData")
+
+```
+The stock selected was "Unilever"(UL), a multinational consumer goods company
+```{r}
+##Time Series plot of the stock
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+plot(Yn, main = "Time series plot of Unilever Ltd")
+
+```
+
+
+
+```{r}
+##Ljung-Box Test
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+Box.test(Yn, lag = 4, type = "L")
+
+lags = 3*(0:5)+1;ps = c()
+for(i in 1:length(lags)){
+ps = cbind(ps, apply(Yn,2, function(x) Box.test(x,lags[i], "L")$p.val))
+}
+colnames(ps) = as.character(lags)
+cat("\nP values of Ljung-Box Tests with different K:\n"); 
+round(ps,5)
+```
+
+The Ljung-Box test on the data gives a p-value of 1.23e-05 which is very less 
+We fail to reject the null hypothesis that data is white noise.
+
+
+```{r}
+##Finding the number of lags from acf and pacf plots
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+Acf(Yt^2, lag.max = 10*log10(100000))
+pacf(Yt)
+Acf(Yt)
+
+
+```
+
+The ACF and PACF plots are somewhat similar and show very few significant lags as the 
+correlation quickly decays. 
+
+I have used auto.arima() to get an initial idea about the parameters of ARMA(p,q) model. 
+We get the (p,q) parameters as (1,1).
+
+```{r}
+##Using auto.arima() on the data set
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+aic.fit = auto.arima(Yn)
+aic.fit
+
+```
+We need to be sure auto.arima() is not leaving out any other solution which has lesser degrees of freedom.
+I have used different methods to filter out few other possible candidate models with different parameters to find out the final model.
+
+First is to use AICc and BIC test statistics to find out the best model
+
+```{r}
+##Using Armia() to find the aic and bic values for sample models
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+
+row_names <- c("p=0", "p=1", "p=2")
+col_names <- c("q=0", "q=1", "q=2")
+
+aic = c()
+
+for (i in 0:2) {
+  for (j in 0:2) {
+    aic = c(aic, Arima(Yn, order = c(j,0,i))$aicc)
+  }
+}
+
+aic_arr = array(aic, dim = c(length(row_names), length(col_names)), dimnames = list(row_names, col_names))
+
+
+bic = c()
+
+for (i in 0:2) {
+  for (j in 0:2) {
+    bic = c(bic, Arima(Yn, order = c(j,0,i))$bic)
+  }
+}
+
+bic_arr = array(bic, dim = c(length(row_names), length(col_names)), dimnames = list(row_names, col_names))
+
+cat("The AICc values are : \n")
+aic_arr
+cat("\n\nThe BIC values are : \n")
+bic_arr
+
+```
+From the AICc values, we can say that ARMA(1,1) has the least value but ARMA(0,1) and ARMA(1,0) have lower values of BIC than ARMA(1,1)
+
+We now check the causality and invertability condition for the three ARMA models mentioned above. 
+
+```{r}
+##Checking the Causality for the candidate models
+##______________________________________________________________________________________________________________________________________________
+
+arma01 = Arima(Yn, order = c(0,0,1))
+arma10 = Arima(Yn, order = c(1,0,0))
+arma11 = Arima(Yn, order = c(1,0,1))
+
+
+arma01
+arma10
+arma11
+
+
+```
+
+
+```{r}
+##Checking the roots of the polynomial to find parameter redundancy
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+
+
+ar.roots = polyroot(c(arma11$coef[c("ar1")], 1))
+ma.roots = polyroot(c(arma11$coef[c("ma1")], 1))
+
+cat("AR roots for (1,1):\t", ar.roots, "\tmodulus:", abs(ar.roots)[1]);
+cat("MA roots for (1,1):\t", ma.roots, "\tmodulus:", abs(ma.roots)[1])
+
+ar.roots = polyroot(c(arma10$coef[c("ar1")], 1))
+ma.roots = polyroot(c(arma01$coef[c("ma1")], 1))
+
+cat("AR roots for (1,0):\t", ar.roots, "\tmodulus:", abs(ar.roots)[1]);
+cat("MA roots for (0,1):\t", ma.roots, "\tmodulus:", abs(ma.roots)[1])
+
+autoplot_roots(arma11)
+autoplot_roots(arma01)
+autoplot_roots(arma10)
+
+
+```
+We can see that all the points lie  within the unit circle and the causality and invertability of the models can be proven. We can also see that the roots of ARMA(1,1) model are soo close to each other indicating some parameter redundancy. So, we cannot use ARMA(1,1). The next best model is ARMA(0,1) from the AICc and BIC values. This model also has lesser parameters than ARMA(1,1).  
+
+
+```{r}
+##Residual analysis using Ljung-Box Test
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+
+res11 = arma11$residuals
+Box.test(res11, round(log(n))+2, "L", fitdf = 2)
+
+res10 = arma10$residuals
+Box.test(res10, round(log(n))+2, "L", fitdf = 1)
+
+res01 = arma01$residuals
+Box.test(res01, round(log(n))+2, "L", fitdf = 1)
+
+cat("\nResidual values for arma01:\n")
+lags = 2:6
+ps = c()
+for(i in 1:length(lags))
+  ps[i] = Box.test(res01,lags[i],"L",1)$p.val
+names(ps) = as.character(lags-1); round(ps,4)
+
+cat("\nResidual values for arma10:\n")
+lags = 2:6
+ps = c()
+for(i in 1:length(lags))
+  ps[i] = Box.test(res10,lags[i],"L",1)$p.val
+names(ps) = as.character(lags-1); round(ps,4)
+
+cat("\nResidual values for arma11:\n")
+lags = 2:6
+ps = c()
+for(i in 1:length(lags))
+  ps[i] = Box.test(res11,lags[i],"L",1)$p.val
+names(ps) = as.character(lags-1); round(ps,4)
+
+
+```
+
+The p-value of ARMA(0,1) model is so small which proves the null hypothesis that they are indeed from white noise. 
+
+
+```{r}
+checkresiduals(arma01)
+ggAcf(residuals(arma01))
+
+```
+
+The residuals are plotted over a normal curve with mean = 0 which proves the fit of our model.
+
+
+
+
+Prediction using ARMA(0,1) model or the MA(1) model.
+```{r}
+##Making the prediction using the forecast() function
+##_________________________________________________________________________________________________________________________________________________________________________________________________
+pred = predict(arma01, n.ahead = 10)
+pred
+fore = forecast(arma01, h = 50, level = c(90, 95))
+
+```
+
+```{r}
+##Plotting the predictions and zooming in at the end to check for convergence
+##________________________________________________________________________________________________________________________________________________________________________________________________
+
+
+plot(fore, xlim = c(2750, 2868), ylim = c(-1,1))
+plot(fore, xlim = c(2765, 2790), ylim = c(-0.0001,0.05))
+
+
+
+```
+
+We can clearly see from the second plot that the graph converges to the mean value from the model that is 0.385. To further get a clearer picture, we plot the forecasting to see the convergence
+
+We have made two plots to get a better look at the convergence. The first plot shows that 
+the forecasting converges onto a value and the second plot gives a closer look at the 
+convergence and we can clearly see it converging to 0.385 which is the mean.
+
+
+
+
+PART - 2
+
+We now start modeling the GARCH model
+GARCH(1,1) is said to have the best fot most of the financial data and we start with this distribution to find out the  best possible distribution
+
+
+```{r warning=FALSE}
+#Checking lowest aic and bic values to find the distribution model
+
+library(rugarch)
+ma1 = Arima(Yn, order = c(0,0,1))
+spec = ugarchspec(mean.model = list(armaOrder = c(0,1)),
+variance.model = list(garchOrder = c(1,1)))
+fit = ugarchfit(data=Yn, spec=spec)
+
+at = resid(ma1)
+et = fit@fit$z
+dists = c("std", "sstd", "ged", "sged", "norm", "snorm", "nig" ,"jsu")
+fits = vector("list", 8)
+for (i in 1:8) {
+  fits[[i]] = fitdist(dists[i], at)
+}
+
+ml = c()
+p = c()
+for(i in 1:8){
+  fit = fits[[i]]
+  ml[i] = fit$values[length(fit$values)]
+  p[i] = length(fit$pars)
+}
+
+aic = 2*ml + 2*p
+names(aic) = dists
+bic = 2*ml + log(n)*p
+names(bic) = dists
+rbind(AIC = aic)
+
+cat("\nAIC of residuals from MA(1)+GARCH(1,1) is for the distribution : ", dists[which.min(aic)])
+
+```
+We now use stardardized residuals "et" to find the best fitting distribution.
+
+```{r warning=FALSE}
+
+for (i in 1:8) {
+  fits[[i]] = fitdist(dists[i], et)
+}
+
+ml = c()
+p = c()
+for(i in 1:8){
+  fit = fits[[i]]
+  ml[i] = fit$values[length(fit$values)]
+  p[i] = length(fit$pars)
+}
+
+aic = 2*ml + 2*p
+names(aic) = dists
+bic = 2*ml + log(n)*p
+names(bic) = dists
+rbind(AIC = aic)
+
+cat("\nAIC of standardized residuals from MA(1) + GARCH(1,1) is for the distribution: ", dists[which.min((aic))], "\n")
+
+```
+
+We can observe that jsu and sstd distributions are teh best fitting distributions among  all of them. We can further gain insight from QQ-plots to see teh best fitting one.
+
+```{r}
+##QQ Plot of the model
+par(mfrow = c(3,2), pty = "s", mex = 0.5)
+q = ((1:n) - 0.5)/n;
+qy = quantile(et,q)
+est = fits[[2]]$pars
+qx = qdist(dists[2], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[2], xlab = "sample quantile",
+       ylab = "MA(1)+norm GARACH(1,1) res")
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+
+est = fits[[8]]$pars
+qx = qdist(dists[8], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[8], xlab = "sample quantile",
+       ylab = "MA(1)+norm GARACH(1,1) res")
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+
+
+qy = quantile(at,q)
+est = fits[[2]]$pars
+qx = qdist(dists[2], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[2], xlab = "sample quantile",
+       ylab = "MA(1) Residuals")
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+est = fits[[8]]$pars
+qx = qdist(dists[8], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[8], xlab = "sample quantile",
+       ylab = "MA(1) Residuals")
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+
+qy = quantile(Yn,q)
+est = fits[[2]]$pars
+qx = qdist(dists[2], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[2], xlab = "sample quantile",
+       ylab = "Unilever Returns")
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+est = fits[[8]]$pars
+qx = qdist(dists[8], q, mu = est["mu"],
+             sigma = est["sigma"], skew = est["skew"],shape = est["shape"])
+plot(qx, qy, main = dists[8], xlab = "sample quantile",
+       ylab = "Unilever Returns")
+
+abline(lsfit(qx[round(c(0.2,0.8)*n)],
+               qy[round(c(0.2,0.8)*n)] )$coef, col = "red3")
+
+
+```
+We can clearly see that the "sstd" distribution has the almost perfect fit among the distributions with "jsu" coming close to it.
+
+We further check the 2 distributions using the 4 information criterion with higher order GARCH models to make sure we did not leave any other best possible model. 
+
+```{r}
+##Checking Garch models with sstd
+sstd.ic = c();
+ind = 0
+sstd.fits = vector("list", 4)
+for(p in 1:2)
+  {for(q in 1:2)
+    {ind = ind +1
+    spec = ugarchspec(mean.model = list(armaOrder = c(0,1)),
+                      variance.model = list(garchOrder = c(p,q)),
+                      distribution.model = "sstd")
+    garch = ugarchfit(data=Yn, spec=spec)
+    sstd.ic = cbind(sstd.ic, infocriteria(garch))
+    sstd.fits[[ind]] = garch
+    names(sstd.fits)[ind] = paste0("garch",p,q)
+    }
+  }
+garch.pq = names(sstd.fits)
+colnames(sstd.ic) = garch.pq;
+sstd.ic
+
+cat("\nModel Selected with sstd distribution:\n");
+apply(sstd.ic,1,function(u) garch.pq[which.min(u)])
+```
+All the information criterion choose GARCH(1,1) model
+
+
+```{r}
+##Checking Various Garch models with jsu
+
+jsu.ic = c();
+ind = 0
+jsu.fits = vector("list", 2)
+for(q in 1:2)
+    {ind = ind +1
+    spec = ugarchspec(mean.model = list(armaOrder = c(0,1)),
+                      variance.model = list(garchOrder = c(1,q)),
+                      distribution.model = "jsu")
+    garch = ugarchfit(data=Yn, spec=spec)
+    jsu.ic = cbind(jsu.ic, infocriteria(garch))
+    jsu.fits[[ind]] = garch
+    names(jsu.fits)[ind] = paste0("garch",1,q)
+  }
+garch.pq = names(jsu.fits)
+colnames(jsu.ic) = garch.pq;
+jsu.ic
+
+cat("\nModel Selected with jsu distribution:\n");
+apply(jsu.ic,1,function(u) garch.pq[which.min(u)])
+
+```
+Even with "jsu", all the criterion pont towards the GARCH(1,1)model
+Comparing the information criterion values, we find that "sstd" distribution has a better fit. We can observe that from the lower values of ic 
+
+
+```{r}
+##With white noise and GARCH with sstd error
+
+sstd.ic = c();
+ind = 0
+sstd.fits = vector("list", 2)
+for(q in 1:2)
+    {ind = ind +1
+    spec = ugarchspec(mean.model = list(armaOrder = c(0,1)),
+                                            distribution.model = "sstd")
+    garch = ugarchfit(data=Yn, spec=spec)
+    sstd.ic = cbind(sstd.ic, infocriteria(garch))
+    sstd.fits[[ind]] = garch
+    names(sstd.fits)[ind] = paste0("garch",1,q)
+  }
+garch.pq = names(sstd.fits)
+colnames(sstd.ic) = garch.pq;
+sstd.ic
+
+cat("\nModel Selected with sstd distribution:\n");
+apply(sstd.ic,1,function(u) garch.pq[which.min(u)])
+```
+
+
+
+The last models we look at are MA(1)+GARCH(1,1) and MA(1)+GARCH(1,2) with "sstd" errors
+
+
+```{r}
+plot(sstd.fits$garch11, which = 9)
+```
+
+```{r}
+plot(sstd.fits$garch12, which = 9)
+```
+
+The Q-Q plots of both GARCH(1,1) and GARCH(1,2) look almost same, hance we choose the simpler model that is GARCH(1,1)
+
+
+
+
+Forecasting with the finalised MA(1)+GARCH(1,1) model with sstd dist:
+
+Retrieving the data
+```{r}
+n = dim(Yn)[1]
+nh = dim(Yt)[1]
+n.fore = nh-n
+cat("\nDates of the Data:\n", paste(c("from", "to"), time(Yt)[c(1,nh)]))
+cat("\nDates of Modeling:\n",paste(c("from", "to"), time(Yt)[c(1,n)]), "Sample size:",n);
+cat("\nDates of forecast:\n", paste(c("from","to"), time(Yt)[c(n+1,nh)]),"length:", n.fore)
+```
+
+Rolling Forecast
+
+```{r}
+spec.11 = ugarchspec(mean.model = list(armaOrder = c(0,1)),
+                     variance.model = list(garchOrder = c(1,1)),
+                     distribution.model = "sstd")
+fit.11 = ugarchfit(data = Yt, spec = spec.11, out.sample = n.fore)
+fore.g = ugarchforecast(fit.11, n.ahead = 1, n.roll = n.fore-1)
+
+```
+
+```{r}
+cat("MA(1) + GARCH(1,1)");
+rate(fore.g)
+```
+We did a one-step rolling forecast. The coverage rates are symmetric and can be observed in beyond and below PI values.
+
+Just to be sure, we still compare it with MA(1) + iid
+
+```{r}
+spec.0 = arfimaspec(mean.model = list(armaOrder = c(0, 1)),
+                    distribution.model = "sstd")
+fit.0 = arfimafit(data = Yt, spec = spec.0, out.sample = n.fore)
+fore.0 = arfimaforecast(fit.0, n.roll = n.fore-1)
+#showShort0(fit.0)
+```
+
+```{r,fig.width=7,fig.height=6.5}
+cat("MA(1) + i.i.d. sstd Noise");
+rate0(fore.0)
+```
+
+```{r,fig.width=7,fig.height=6.5}
+plot_PI(fore.0,fore.g)
+```
+We can see from the diagram that the MA(1)+GARCH(1,1) model does a better job at capturing the volatility of the data when compared to the iid white noise model.
+
+
+```{r}
+alpha = 0.05; 
+S = 10000/100
+today = which(colnames(fitted(fore.g)) == "2019-12-16")
+today = today:(today+2)
+
+# ARMA + GARCH
+mu = fitted(fore.g)["T+1", today]
+sig = sigma(fore.g)["T+1", today]
+q = qdist("sstd", p = alpha, skew = coef(fit.11)["skew"]
+          ,shape = coef(fit.11)["shape"])
+VaR = -S*(mu + q*sig);
+cat("\nVaR with ARMA + GARCH model from Dec 16th :\n");VaR
+
+#with iid noise
+mu.iid = fitted(fore.0)["T+1", today]
+q.iid = qdist("sstd", p = alpha, skew = coef(fit.0)["skew"], shape = coef(fit.0)["shape"])
+VaR.iid = -S*(mu.iid+q.iid)
+cat("one day value at risk with iid noise from Dec 16th : \n" )
+VaR.iid
+```
+During normal times, we can see that iid model performs better. But that's not the case when huge amount of volatility is present in the data.
+
+To test that we take data from period such as covid time where there is high level of volatility.
+
+```{r}
+alpha = 0.05; 
+S = 10000/100
+covid_date = which(colnames(fitted(fore.g)) == "2020-03-16")
+covid_date = covid_date:(covid_date+2)
+# ARMA + GARCH
+mu = fitted(fore.g)["T+1", covid_date]
+sig = sigma(fore.g)["T+1", covid_date]
+q = qdist("sstd", p = alpha, skew = coef(fit.11)["skew"]
+          ,shape = coef(fit.11)["shape"])
+VaR = -S*(mu + q*sig);
+cat("\nVaR with ARMA + GARCH model:\n");VaR
+
+
+mu.iid = fitted(fore.0)["T+1", covid_date]
+q.iid = qdist("sstd", p = alpha, skew = coef(fit.0)["skew"], shape = coef(fit.0)["shape"])
+VaR.iid = -S*(mu.iid+q.iid)
+cat("one day value at risk with iid noise : \n")
+VaR.iid
+```
+This clearly indicates that GARCH model is much better when it comes to modelling volatility. 
+
+Therefore we can say that MA(1)+GARCH(1,1) with sstd distribution is well suited to forecast Unilever stock data.
